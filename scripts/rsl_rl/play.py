@@ -9,6 +9,7 @@
 
 import argparse
 from importlib.metadata import version
+import json
 import sys
 
 from isaaclab.app import AppLauncher
@@ -79,6 +80,106 @@ from isaaclab_tasks.utils import get_checkpoint_path
 from isaaclab_tasks.utils.hydra import hydra_task_config
 
 import booster_train.tasks  # noqa: F401
+
+
+def _jsonable(value):
+    if isinstance(value, dict):
+        return {str(key): _jsonable(item) for key, item in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_jsonable(item) for item in value]
+    if isinstance(value, torch.Tensor):
+        return value.detach().cpu().tolist()
+    if isinstance(value, (str, int, float, bool)) or value is None:
+        return value
+    return repr(value)
+
+
+def _action_cfg(env_cfg):
+    actions_cfg = getattr(env_cfg, "actions", None)
+    return getattr(actions_cfg, "joint_pos", None)
+
+
+def _velocity_command_ranges(env_cfg):
+    commands_cfg = getattr(env_cfg, "commands", None)
+    command_cfg = getattr(commands_cfg, "base_velocity", None)
+    ranges_cfg = getattr(command_cfg, "ranges", None)
+    if ranges_cfg is None:
+        return None
+
+    ranges = {}
+    for name in ("lin_vel_x", "lin_vel_y", "ang_vel_z", "heading"):
+        value = getattr(ranges_cfg, name, None)
+        if value is not None:
+            ranges[name] = value
+    return ranges
+
+
+def _policy_observation_history_length(env_cfg):
+    history_length = getattr(env_cfg, "observation_history_length", None)
+    if history_length is not None:
+        return history_length
+
+    observations_cfg = getattr(env_cfg, "observations", None)
+    policy_cfg = getattr(observations_cfg, "policy", None)
+    if policy_cfg is None:
+        return None
+
+    term_history_lengths = []
+    for name in dir(policy_cfg):
+        if name.startswith("_") or name in ("concatenate_terms", "concatenate_dim", "enable_corruption"):
+            continue
+        term_cfg = getattr(policy_cfg, name)
+        if hasattr(term_cfg, "history_length"):
+            term_history_lengths.append(getattr(term_cfg, "history_length", 0))
+
+    if len(term_history_lengths) == 1:
+        return term_history_lengths[0]
+    if term_history_lengths and len(set(term_history_lengths)) == 1:
+        return term_history_lengths[0]
+    return _jsonable(term_history_lengths) if term_history_lengths else None
+
+
+def _policy_manifest(env_cfg, agent_cfg, args_cli, resume_path: str, jit_filename: str, onnx_filename: str):
+    robot_cfg = getattr(env_cfg.scene, "robot", None)
+    joint_pos_action_cfg = _action_cfg(env_cfg)
+    action_joint_names = getattr(env_cfg, "action_joint_names", None) or getattr(
+        joint_pos_action_cfg, "joint_names", None
+    )
+    actuators = getattr(robot_cfg, "actuators", {}) if robot_cfg is not None else {}
+    actuator_manifest = {}
+    for name, actuator_cfg in actuators.items():
+        actuator_manifest[name] = {
+            "class_type": getattr(
+                getattr(actuator_cfg, "class_type", None),
+                "__name__",
+                repr(getattr(actuator_cfg, "class_type", None)),
+            ),
+            "joint_names_expr": _jsonable(getattr(actuator_cfg, "joint_names_expr", None)),
+            "effort_limit_sim": _jsonable(getattr(actuator_cfg, "effort_limit_sim", None)),
+            "velocity_limit_sim": _jsonable(getattr(actuator_cfg, "velocity_limit_sim", None)),
+            "stiffness": _jsonable(getattr(actuator_cfg, "stiffness", None)),
+            "damping": _jsonable(getattr(actuator_cfg, "damping", None)),
+            "armature": _jsonable(getattr(actuator_cfg, "armature", None)),
+        }
+
+    return {
+        "task": args_cli.task,
+        "experiment_name": agent_cfg.experiment_name,
+        "source_checkpoint": resume_path,
+        "exported_jit": jit_filename,
+        "exported_onnx": onnx_filename,
+        "motion_file": _jsonable(getattr(getattr(env_cfg.commands, "motion", None), "motion_file", None)),
+        "action_scale": _jsonable(getattr(joint_pos_action_cfg, "scale", None)),
+        "action_joint_names": _jsonable(action_joint_names),
+        "action_preserve_order": _jsonable(getattr(joint_pos_action_cfg, "preserve_order", None)),
+        "actor_output_dim": len(action_joint_names) if action_joint_names is not None else None,
+        "observation_history_length": _jsonable(_policy_observation_history_length(env_cfg)),
+        "single_frame_observation_dim": _jsonable(getattr(env_cfg, "single_frame_observation_dim", None)),
+        "exported_observation_dim": _jsonable(getattr(env_cfg, "exported_observation_dim", None)),
+        "velocity_command_ranges": _jsonable(_velocity_command_ranges(env_cfg)),
+        "robot_asset_path": _jsonable(getattr(getattr(robot_cfg, "spawn", None), "asset_path", None)),
+        "actuators": actuator_manifest,
+    }
 
 
 @hydra_task_config(args_cli.task, args_cli.agent)
@@ -165,12 +266,21 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
     # export policy to onnx/jit
     export_model_dir = os.path.join(os.path.dirname(resume_path), "exported")
     run_name = os.path.basename(log_dir)
-    export_policy_as_jit(policy_nn, normalizer=normalizer, path=export_model_dir,
-                         filename=f"{agent_cfg.experiment_name}_{run_name}.pt")
+    jit_filename = f"{agent_cfg.experiment_name}_{run_name}.pt"
+    onnx_filename = f"{agent_cfg.experiment_name}_{run_name}.onnx"
+    export_policy_as_jit(policy_nn, normalizer=normalizer, path=export_model_dir, filename=jit_filename)
     export_policy_as_onnx(
         policy_nn, normalizer=normalizer, path=export_model_dir,
-        filename=f"{agent_cfg.experiment_name}_{run_name}.onnx"
+        filename=onnx_filename
     )
+    manifest_path = os.path.join(export_model_dir, f"{agent_cfg.experiment_name}_{run_name}.manifest.json")
+    with open(manifest_path, "w", encoding="utf-8") as f:
+        json.dump(
+            _policy_manifest(env_cfg, agent_cfg, args_cli, resume_path, jit_filename, onnx_filename),
+            f,
+            indent=2,
+        )
+    print(f"[INFO]: Exported policy manifest to: {manifest_path}")
 
     if args_cli.headless and not args_cli.video:
         print("[INFO] Headless mode and no video recording. Exiting after model export.")
