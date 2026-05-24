@@ -108,6 +108,19 @@ K1_WALK_DEFAULT_JOINT_POS = [
 K1_WALK_DEFAULT_JOINT_POS_BY_NAME = dict(zip(K1_REAL_JOINT_NAMES, K1_WALK_DEFAULT_JOINT_POS))
 
 K1_WALK_FOOT_BODY_NAMES = ["left_foot_link", "right_foot_link"]
+K1_WALK_ARM_JOINT_NAMES = [
+    "ALeft_Shoulder_Pitch",
+    "ARight_Shoulder_Pitch",
+    "Left_Shoulder_Roll",
+    "Right_Shoulder_Roll",
+    "Left_Elbow_Pitch",
+    "Right_Elbow_Pitch",
+    "Left_Elbow_Yaw",
+    "Right_Elbow_Yaw",
+]
+K1_WALK_ARM_ACTION_INDICES = [
+    K1_WALK_POLICY_JOINT_NAMES.index(name) for name in K1_WALK_ARM_JOINT_NAMES
+]
 K1_WALK_LEG_JOINT_NAMES = [
     ".*_Hip_Pitch",
     ".*_Hip_Roll",
@@ -354,6 +367,27 @@ class RewardsCfg:
         },
     )
     action_rate_l2 = RewTerm(func=mdp.action_rate_l2, weight=-0.01)
+    arm_joint_deviation_l1 = RewTerm(
+        func=mdp.joint_deviation_l1,
+        weight=-0.2,
+        params={
+            "asset_cfg": SceneEntityCfg(
+                "robot",
+                joint_names=K1_WALK_ARM_JOINT_NAMES,
+                preserve_order=True,
+            )
+        },
+    )
+    arm_action_l2 = RewTerm(
+        func=mdp.action_l2_subset,
+        weight=-0.03,
+        params={"action_indices": K1_WALK_ARM_ACTION_INDICES},
+    )
+    arm_action_rate_l2 = RewTerm(
+        func=mdp.action_rate_l2_subset,
+        weight=-0.02,
+        params={"action_indices": K1_WALK_ARM_ACTION_INDICES},
+    )
     flat_orientation_l2 = RewTerm(func=mdp.flat_orientation_l2, weight=-1.0)
     termination_penalty = RewTerm(func=mdp.is_terminated, weight=-200.0)
     feet_air_time = RewTerm(

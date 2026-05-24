@@ -25,6 +25,16 @@ def k1_joint_energy(env, asset_cfg: SceneEntityCfg = SceneEntityCfg("robot")) ->
     return torch.norm(joint_power, dim=-1)
 
 
+def action_l2_subset(env, action_indices: list[int] | tuple[int, ...]) -> torch.Tensor:
+    return torch.sum(torch.square(env.action_manager.action[:, action_indices]), dim=-1)
+
+
+def action_rate_l2_subset(env, action_indices: list[int] | tuple[int, ...]) -> torch.Tensor:
+    action = env.action_manager.action[:, action_indices]
+    prev_action = env.action_manager.prev_action[:, action_indices]
+    return torch.sum(torch.square(action - prev_action), dim=-1)
+
+
 def k1_body_force(env, sensor_cfg: SceneEntityCfg, threshold: float, max_reward: float) -> torch.Tensor:
     contact_sensor: ContactSensor = env.scene.sensors[sensor_cfg.name]
     reward = contact_sensor.data.net_forces_w[:, sensor_cfg.body_ids, 2].norm(dim=-1)
