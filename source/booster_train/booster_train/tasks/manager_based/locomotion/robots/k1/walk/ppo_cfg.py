@@ -4,7 +4,7 @@ from isaaclab_rl.rsl_rl import RslRlOnPolicyRunnerCfg, RslRlPpoActorCriticCfg, R
 
 @configclass
 class PPORunnerCfg(RslRlOnPolicyRunnerCfg):
-    """LeggedLab/T1-style PPO recipe for K1 deploy-compatible locomotion."""
+    """PPO runner configuration for K1 deploy-compatible locomotion."""
 
     seed = 42
     num_steps_per_env = 24

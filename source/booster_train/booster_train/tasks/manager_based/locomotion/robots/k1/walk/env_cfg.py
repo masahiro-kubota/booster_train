@@ -223,8 +223,8 @@ class ObservationsCfg:
 
     @configclass
     class CriticCfg(ObsGroup):
-        legged_lab_critic_obs = ObsTerm(
-            func=mdp.k1_legged_lab_critic_observation,
+        privileged_locomotion_obs = ObsTerm(
+            func=mdp.k1_privileged_locomotion_observation,
             params={
                 "command_name": "base_velocity",
                 "asset_cfg": SceneEntityCfg(
@@ -314,7 +314,7 @@ class EventCfg:
 
 @configclass
 class RewardsCfg:
-    """LeggedLab/T1-style reward terms for K1 deploy-compatible locomotion."""
+    """Reward terms for K1 deploy-compatible locomotion."""
 
     track_lin_vel_xy_exp = RewTerm(
         func=mdp.track_lin_vel_xy_yaw_frame_exp,
@@ -548,4 +548,6 @@ class PlayFlatEnvCfg(FlatEnvCfg):
         self.scene.env_spacing = 2.5
         self.events.physics_material = None
         self.events.add_base_mass = None
+        self.events.reset_base = None
+        self.events.reset_robot_joints = None
         self.events.push_robot = None

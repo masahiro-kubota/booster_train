@@ -38,7 +38,7 @@ def k1_deploy_locomotion_observation(
     )
 
 
-def k1_legged_lab_critic_observation(
+def k1_privileged_locomotion_observation(
     env: ManagerBasedRLEnv,
     command_name: str,
     asset_cfg: SceneEntityCfg,
@@ -46,7 +46,7 @@ def k1_legged_lab_critic_observation(
     obs_dof_vel_scale: float,
     contact_threshold: float,
 ) -> torch.Tensor:
-    """Single-frame privileged critic observation following the LeggedLab locomotion recipe."""
+    """Single-frame privileged critic observation for K1 locomotion training."""
     asset: Articulation = env.scene[asset_cfg.name]
     contact_sensor: ContactSensor = env.scene.sensors[sensor_cfg.name]
     contacts = (
