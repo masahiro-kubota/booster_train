@@ -38,3 +38,10 @@ class K1FlatPPORunnerCfg(RslRlOnPolicyRunnerCfg):
         desired_kl=0.01,
         max_grad_norm=1.0,
     )
+
+
+@configclass
+class K1FlatRewardAPPORunnerCfg(K1FlatPPORunnerCfg):
+    """PPO runner configuration for K1 flat velocity Reward-A ablation."""
+
+    experiment_name = "k1_flat_reward_a"

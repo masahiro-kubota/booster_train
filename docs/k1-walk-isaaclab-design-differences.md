@@ -44,8 +44,10 @@ Digit / Cassie / direct humanoid / humanoid_amp / classic humanoid は今回の�
 | actor 履歴 | 標準 flat cfg では flatten 履歴を使わない | 1フレーム 69 次元、10フレーム flatten 後 690 次元 | 残す | base linear velocity なしで運動状態を推定しやすくするため |
 | critic observation | G1/H1 の該当 cfg には separate critic group がない | `critic` group を追加し、actor obs + `base_lin_vel` + 足接触を使う | 残す | asymmetric actor-critic。actor は deploy 可能なまま、critic だけ学習中の privileged 情報を使う |
 | observation corruption | G1/H1 train は `enable_corruption=True`、play で無効化 | K1 は policy/critic とも corruption 無効 | 残す | deploy 互換観測を決定的に保つ。ノイズ注入を戻す場合は挙動変更として扱う |
-| action 関節指定 | `joint_names=[".*"]`, scale `0.5`。asset に腕があれば腕も action に含む | deploy 順序の 20 関節を明示、`preserve_order=True`, scale `0.25` | 残す | action 順序と scale を実機 controller / export policy と一致させるため |
+| action 関節指定 | `joint_names=[".*"]`, scale `0.5`。G1/H1 asset では脚・胴・腕・手指などの actuated joints が対象 | deploy 順序の 20 関節を明示、`preserve_order=True`, scale は `K1_ACTION_SCALE` 由来の関節別値 | 残す | action 順序と scale を実機 controller / export policy と一致させるため |
+| 頭部 action | G1/H1 velocity asset cfg には K1 の `.*Head.*` 相当の head actuator がないため、`joint_names=[".*"]` でも頭は action 対象にならない | K1 asset には `AAHead_yaw` / `Head_pitch` 用の `.*Head.*` actuator があるが、velocity policy では deploy 互換 20DoF に絞って頭を除外 | 残す | K1 で `joint_names=[".*"]` にすると頭2DoFまで action に入るため、G1/H1 と同じ感覚で `.*` は使えない |
 | 腕 action | G1/H1 も腕 action を含み得る。`joint_deviation_arms` で default 姿勢からのずれを抑える | K1 も腕を action に含め、腕8DoFを index 指定して `arm_joint_deviation_l1`, `arm_action_l2`, `arm_action_rate_l2` で抑える | 残す | K1 は腕を姿勢安定用の可動質量として過剰に使うことがあるため、deploy action 順序のまま腕の大振りを抑える |
+| default joint pose | G1/H1 は `G1_MINIMAL_CFG` / `H1_MINIMAL_CFG` を task 側で `replace` するだけで、初期姿勢は asset cfg 側の `init_state.joint_pos` に置かれている | K1 は task cfg 側で `K1_DEFAULT_JOINT_POS_BY_NAME` により全22関節の初期姿勢を上書き | 残す、非reward差分として明記 | K1 locomotion/deploy 用の立ち姿勢を task 側で固定しているため。RewardA 実験でも reward 以外の前提差分として残る |
 | command heading | 共通 cfg は heading command をサポートし、G1/H1 で range を調整 | `heading_command=False`, `rel_heading_envs=0.0` | 残す | K1 deploy policy は direct velocity command を受ける設計 |
 | command range | G1 flat は x `(0,1)`, y `(-0.5,0.5)`, yaw `(-1,1)`。H1 は y `0` | K1 は x/y/yaw すべて `(-1,1)`, `rel_standing_envs=0.2` | 残すが要実験レビュー | 旧 K1 walk の command randomization を維持。後退・横移動まで含むため G1/H1 flat より広い |
 | contact body | G1/H1 は torso / ankle link regex | K1 は base `Trunk`, 足 `left_foot_link` / `right_foot_link` | 残す | K1 URDF body 名に合わせるため |
@@ -78,7 +80,8 @@ Digit / Cassie / direct humanoid / humanoid_amp / classic humanoid は今回の�
 | actor history | 10フレーム flatten、690 次元を維持 |
 | actor に入れない情報 | `base_lin_vel` / `root_lin_vel_b` は actor に入れない |
 | critic privileged obs | `base_lin_vel` と足接触を critic のみへ追加 |
-| action order | K1 deploy 順序の 20 関節と `preserve_order=True` を維持 |
+| action order | K1 deploy 順序の 20 関節と `preserve_order=True` を維持。頭2DoFは action 対象外 |
+| action scale | 旧 walk の一律 `0.25` ではなく、BeyondMimic K1 と同じ `K1_ACTION_SCALE` 由来の関節別 scale を velocity 20DoF に解決して使用 |
 | command randomization | 旧 K1 walk の x/y/yaw `(-1,1)` と standing env ratio を維持 |
 | reward set/weights | 旧 K1 walk の main flat task の reward set/weights を維持 |
 | termination | `bad_orientation(limit_angle=0.8)` を維持 |

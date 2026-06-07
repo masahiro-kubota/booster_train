@@ -115,10 +115,6 @@ for a in BOOSTER_K1_CFG.actuators.values():
         if n in e and n in s and s[n]:
             K1_ACTION_SCALE[n] = 0.25 * e[n] / s[n]
 
-print(f'{BOOSTER_K1_CFG.actuators=}')
-print(f'{K1_ACTION_SCALE=}')
-
-
 BOOSTER_T1_CFG = ArticulationCfg(
     spawn=sim_utils.UrdfFileCfg(
         fix_base=False,

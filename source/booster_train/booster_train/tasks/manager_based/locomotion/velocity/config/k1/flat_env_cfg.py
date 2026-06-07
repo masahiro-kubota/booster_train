@@ -5,6 +5,7 @@
 
 from __future__ import annotations
 
+import re
 from dataclasses import MISSING
 
 import isaaclab.sim as sim_utils
@@ -22,11 +23,10 @@ from isaaclab.terrains import TerrainImporterCfg
 from isaaclab.utils import configclass
 from isaaclab.utils.assets import ISAAC_NUCLEUS_DIR
 
-from booster_train.assets.robots.booster import BOOSTER_K1_CFG
+from booster_train.assets.robots.booster import BOOSTER_K1_CFG, K1_ACTION_SCALE
 import booster_train.tasks.manager_based.locomotion.velocity.mdp as mdp
 
 
-K1_FLAT_ACTION_SCALE = 0.25
 K1_FLAT_OBS_DOF_VEL_SCALE = 0.1
 K1_FLAT_OBSERVATION_HISTORY_LENGTH = 10
 K1_FLAT_SINGLE_FRAME_OBSERVATION_DIM = 69
@@ -54,6 +54,28 @@ K1_FLAT_POLICY_JOINT_NAMES = [
     "Left_Ankle_Roll",
     "Right_Ankle_Roll",
 ]
+
+
+def _make_k1_velocity_action_scale(action_joint_names: list[str]) -> dict[str, float]:
+    action_scale: dict[str, float] = {}
+    matched_joint_names: set[str] = set()
+    for joint_name_expr, scale in K1_ACTION_SCALE.items():
+        matched_names = [joint_name for joint_name in action_joint_names if re.fullmatch(joint_name_expr, joint_name)]
+        if not matched_names:
+            continue
+        action_scale[joint_name_expr] = scale
+        for joint_name in matched_names:
+            if joint_name in matched_joint_names:
+                raise ValueError(f"Multiple K1 action scale patterns match joint '{joint_name}'.")
+            matched_joint_names.add(joint_name)
+
+    missing_joint_names = sorted(set(action_joint_names) - matched_joint_names)
+    if missing_joint_names:
+        raise ValueError(f"Missing K1 action scale for joints: {missing_joint_names}")
+    return action_scale
+
+
+K1_FLAT_ACTION_SCALE = _make_k1_velocity_action_scale(K1_FLAT_POLICY_JOINT_NAMES)
 
 K1_REAL_JOINT_NAMES = [
     "AAHead_yaw",
@@ -108,6 +130,17 @@ K1_DEFAULT_JOINT_POS = [
 K1_DEFAULT_JOINT_POS_BY_NAME = dict(zip(K1_REAL_JOINT_NAMES, K1_DEFAULT_JOINT_POS))
 
 K1_FOOT_BODY_NAMES = ["left_foot_link", "right_foot_link"]
+K1_LEG_JOINT_NAMES = [
+    ".*_Hip_.*",
+    ".*_Knee_Pitch",
+]
+K1_ANKLE_JOINT_NAMES = [
+    ".*_Ankle_.*",
+]
+K1_HIP_DEVIATION_JOINT_NAMES = [
+    ".*_Hip_Yaw",
+    ".*_Hip_Roll",
+]
 K1_ARM_JOINT_NAMES = [
     "ALeft_Shoulder_Pitch",
     "ARight_Shoulder_Pitch",
@@ -470,6 +503,87 @@ class RewardsCfg:
 
 
 @configclass
+class RewardARewardsCfg:
+    """Isaac Lab G1/H1-flat-like baseline rewards for K1 reward ablation."""
+
+    track_lin_vel_xy_exp = RewTerm(
+        func=mdp.track_lin_vel_xy_yaw_frame_exp,
+        weight=1.0,
+        params={"command_name": "base_velocity", "std": 0.5},
+    )
+    track_ang_vel_z_exp = RewTerm(
+        func=mdp.track_ang_vel_z_world_exp,
+        weight=1.0,
+        params={"command_name": "base_velocity", "std": 0.5},
+    )
+    lin_vel_z_l2 = RewTerm(func=mdp.lin_vel_z_l2, weight=-0.2)
+    ang_vel_xy_l2 = RewTerm(func=mdp.ang_vel_xy_l2, weight=-0.05)
+    dof_torques_l2 = RewTerm(
+        func=mdp.joint_torques_l2,
+        weight=-2.0e-6,
+        params={"asset_cfg": SceneEntityCfg("robot", joint_names=K1_LEG_JOINT_NAMES)},
+    )
+    dof_acc_l2 = RewTerm(
+        func=mdp.joint_acc_l2,
+        weight=-1.0e-7,
+        params={"asset_cfg": SceneEntityCfg("robot", joint_names=K1_LEG_JOINT_NAMES)},
+    )
+    action_rate_l2 = RewTerm(func=mdp.action_rate_l2, weight=-0.005)
+    flat_orientation_l2 = RewTerm(func=mdp.flat_orientation_l2, weight=-1.0)
+    termination_penalty = RewTerm(func=mdp.is_terminated, weight=-200.0)
+    feet_air_time = RewTerm(
+        func=mdp.feet_air_time_positive_biped,
+        weight=0.75,
+        params={
+            "sensor_cfg": SceneEntityCfg(
+                "contact_forces",
+                body_names=K1_FOOT_BODY_NAMES,
+                preserve_order=True,
+            ),
+            "command_name": "base_velocity",
+            "threshold": 0.4,
+        },
+    )
+    feet_slide = RewTerm(
+        func=mdp.feet_slide,
+        weight=-0.1,
+        params={
+            "sensor_cfg": SceneEntityCfg(
+                "contact_forces",
+                body_names=K1_FOOT_BODY_NAMES,
+                preserve_order=True,
+            ),
+            "asset_cfg": SceneEntityCfg(
+                "robot",
+                body_names=K1_FOOT_BODY_NAMES,
+                preserve_order=True,
+            ),
+        },
+    )
+    dof_pos_limits = RewTerm(
+        func=mdp.joint_pos_limits,
+        weight=-1.0,
+        params={"asset_cfg": SceneEntityCfg("robot", joint_names=K1_ANKLE_JOINT_NAMES)},
+    )
+    joint_deviation_hip = RewTerm(
+        func=mdp.joint_deviation_l1,
+        weight=-0.1,
+        params={"asset_cfg": SceneEntityCfg("robot", joint_names=K1_HIP_DEVIATION_JOINT_NAMES)},
+    )
+    joint_deviation_arms = RewTerm(
+        func=mdp.joint_deviation_l1,
+        weight=-0.1,
+        params={
+            "asset_cfg": SceneEntityCfg(
+                "robot",
+                joint_names=K1_ARM_JOINT_NAMES,
+                preserve_order=True,
+            )
+        },
+    )
+
+
+@configclass
 class TerminationsCfg:
     """Termination terms for the MDP."""
 
@@ -534,6 +648,28 @@ class K1FlatEnvCfg(ManagerBasedRLEnvCfg):
 
 class K1FlatEnvCfg_PLAY(K1FlatEnvCfg):
     """Reduced K1 flat velocity environment for play/export."""
+
+    def __post_init__(self) -> None:
+        super().__post_init__()
+
+        self.scene.num_envs = 50
+        self.scene.env_spacing = 2.5
+        self.events.physics_material = None
+        self.events.add_base_mass = None
+        self.events.reset_base = None
+        self.events.reset_robot_joints = None
+        self.events.push_robot = None
+
+
+@configclass
+class K1FlatRewardAEnvCfg(K1FlatEnvCfg):
+    """K1 flat velocity task with Isaac Lab G1/H1-flat-like baseline rewards."""
+
+    rewards: RewardARewardsCfg = RewardARewardsCfg()
+
+
+class K1FlatRewardAEnvCfg_PLAY(K1FlatRewardAEnvCfg):
+    """Reduced Reward-A K1 flat velocity environment for play/export."""
 
     def __post_init__(self) -> None:
         super().__post_init__()
