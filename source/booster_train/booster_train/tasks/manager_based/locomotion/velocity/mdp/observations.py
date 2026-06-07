@@ -10,6 +10,7 @@ from typing import TYPE_CHECKING
 import torch
 
 from isaaclab.assets import Articulation
+from isaaclab.envs.mdp.observations import base_lin_vel
 from isaaclab.managers import SceneEntityCfg
 from isaaclab.sensors import ContactSensor
 
@@ -65,4 +66,4 @@ def k1_privileged_locomotion_observation(
         asset_cfg=asset_cfg,
         obs_dof_vel_scale=obs_dof_vel_scale,
     )
-    return torch.cat((policy_obs, asset.data.root_lin_vel_b, contacts.float()), dim=-1)
+    return torch.cat((policy_obs, base_lin_vel(env, asset_cfg), contacts.float()), dim=-1)
