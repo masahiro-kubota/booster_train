@@ -1,111 +1,110 @@
-# K1 Walk vs Isaac Lab Biped Velocity Design Differences
+# K1 Flat Velocity と Isaac Lab G1/H1 Velocity タスクの設計差分
 
-This note records the intentional behavior differences that should survive a
-style refactor of the K1 walk task toward the Isaac Lab G1/H1 velocity task
-style.
+このメモは、K1 の flat velocity 学習タスクを Isaac Lab 標準の manager-based velocity task 形式へ移植するときに、どこを標準へ合わせ、どこを K1 用の設計差分として残すかを確認するためのものです。
 
-Reference files:
+結論として、K1 flat velocity は Isaac Lab の G1/H1 velocity task と同じ task family / manager 構造 / reward family を使っています。ただし、単に G1/H1 標準 task の robot asset を K1 に差し替えただけではありません。特に actor observation、action 順序、critic privileged observation、domain randomization、reward の追加項目、PPO 設定は K1 deploy と既存 K1 walk の学習結果を維持するために意図的に違います。なお Isaac Lab の `base_lin_vel` helper は内部的に `asset.data.root_lin_vel_b` を返すため、このメモでは標準 API 名として `base_lin_vel`、実体を示す必要がある場合だけ `root_lin_vel_b` と書きます。
 
-- K1 walk task:
-  `source/booster_train/booster_train/tasks/manager_based/locomotion/robots/k1/walk/env_cfg.py`
-- K1 walk observation helpers:
-  `source/booster_train/booster_train/tasks/manager_based/locomotion/mdp/observations.py`
-- K1 walk reward helpers:
-  `source/booster_train/booster_train/tasks/manager_based/locomotion/mdp/rewards.py`
-- Isaac Lab references, in the local checkout:
-  `../IsaacLab/source/isaaclab_tasks/isaaclab_tasks/manager_based/locomotion/velocity/`
+## 比較対象
 
-## Summary
+主比較対象は Isaac Lab の G1/H1 manager-based velocity task です。
 
-The K1 walk task should be treated as a K1-specific derivative of the Isaac Lab
-G1/H1 biped velocity tasks, not as a pure robot-asset swap.
-
-The main shared design is:
-
-- Manager-based Isaac Lab task structure.
-- Uniform base velocity command.
-- Joint position actions with default offsets.
-- RSL-RL PPO runner and standard PPO hyperparameter shape.
-- Biped velocity reward family:
-  `track_lin_vel_xy_yaw_frame_exp`, `track_ang_vel_z_world_exp`,
-  `feet_air_time_positive_biped`, `feet_slide`, `flat_orientation_l2`,
-  and `is_terminated`.
-
-The main K1-specific design is:
-
-- Deployment-compatible actor observation.
-- Actor does not observe base linear velocity.
-- Actor observation uses flattened temporal history.
-- Critic receives privileged simulation-only signals.
-- K1 joint order, K1 default pose, and K1 foot/contact body names are explicit.
-- Flat-ground, no-height-scan task by default.
-
-## Intentional Differences To Keep
-
-| Area | Isaac Lab G1/H1 velocity style | K1 walk design | Keep? | Reason |
-| --- | --- | --- | --- | --- |
-| Robot asset | `G1_MINIMAL_CFG` or `H1_MINIMAL_CFG` in robot-specific config | `BOOSTER_K1_CFG` injected in `FlatEnvCfg.__post_init__` | Yes | K1 needs its own articulation, initial base height, and default joint pose. |
-| Action joints | Usually broad regex such as `[".*"]`, then robot-specific penalties scope subsets | Explicit `K1_WALK_POLICY_JOINT_NAMES` with `preserve_order=True` | Yes | Policy action order must match K1 deploy/export order. |
-| Action scale | Isaac Lab base velocity config uses `0.5`; robot configs tune terms | K1 uses `K1_WALK_ACTION_SCALE = 0.25` | Yes | K1 actuator range and deploy policy expectations differ. |
-| Actor observation shape | Standard observation terms are listed independently and concatenated by the manager | One deploy-compatible observation term, flattened over history | Yes | This fixes the ONNX/deploy input contract. |
-| Actor base linear velocity | Often included in Isaac Lab policy observations, especially in base velocity tasks | Not included in the actor observation | Yes | Base linear velocity is not directly available on hardware with the same quality as simulation truth. |
-| Actor angular velocity | `base_ang_vel` observation term | `root_ang_vel_b` inside the deploy observation | Yes | Equivalent hardware-friendly IMU signal, just packaged differently. |
-| Actor gravity | `projected_gravity` observation term | `projected_gravity_b` inside the deploy observation | Yes | Hardware-friendly IMU-derived orientation signal. |
-| Actor command | `generated_commands(base_velocity)` | Command vector embedded in the deploy observation | Yes | Same command concept, different packaging. |
-| Actor joint state | `joint_pos_rel`, `joint_vel_rel` terms | Ordered K1 joint position error and scaled joint velocity | Yes | Preserves deploy order and deploy scaling. |
-| Actor history | Usually no flattened temporal history in the base Isaac Lab config | `history_length = 10`, `69 * 10 = 690` actor input | Yes | History helps the actor infer velocity/state without `base_lin_vel`. |
-| Observation corruption | Standard configs often enable noise/corruption per term | K1 deploy observation has corruption disabled | Yes, unless explicitly changed | Deployment-compatible observation should remain deterministic unless noise injection is deliberately reintroduced. |
-| Critic observation | Often same policy group or standard privileged setup depending on task | Privileged critic observation adds `root_lin_vel_b` and foot contacts | Yes | Asymmetric actor-critic: actor stays deployable, critic can use simulation truth during training. |
-| Terrain | Isaac Lab rough configs use terrain generator and height scanner; flat configs disable them | K1 walk is flat plane by default and has no height scanner | Yes for current K1 walk task | Current task is flat/deploy-focused. Add a separate rough variant if terrain perception is needed. |
-| Base contact body | `torso_link` or robot-specific base body | `Trunk` | Yes | K1 body naming. |
-| Foot body names | G1/H1 ankle/foot link regexes | `left_foot_link`, `right_foot_link` | Yes | K1 body naming and contact sensor scoping. |
-| Command heading | Isaac Lab base config supports heading commands; G1/H1 tune ranges | K1 disables heading commands | Yes | Current policy receives direct velocity command only. |
-| Command range | Isaac Lab robot configs tune x/y/yaw ranges per robot | K1 random command variant uses full x/y/yaw ranges; fixed-forward variant pins command | Yes, but review weights/ranges separately | These are task choices, not style choices. |
-| Reward helper names | Isaac Lab uses generic helpers where available | K1 adds `k1_*` helpers for torque, energy, contact force, stumble, and foot spacing | Yes where K1-specific behavior differs | These encode K1-specific reward semantics or deploy-specific scoping. |
-| PPO architecture | G1/H1 rough use `[512, 256, 128]` for actor/critic | K1 uses `[512, 256, 128]` | Yes | Same shape is acceptable; not a naming/style issue. |
-| PPO iterations | Isaac Lab examples use smaller iteration counts | K1 uses `max_iterations = 50000` | Yes, but tune experimentally | Training budget is a project choice. |
-| PPO empirical normalization | Isaac Lab G1/H1 examples use `False` | K1 walk uses `True` | Yes, unless training evidence says otherwise | This is a behavior change, not a style refactor item. |
-
-## Style-Only Refactor Candidates
-
-These can be changed to look more like Isaac Lab as long as behavior remains
-unchanged.
-
-| Current K1 walk item | Isaac Lab-style target | Constraint |
-| --- | --- | --- |
-| `K1WalkSceneCfg` | A name aligned with the environment class, such as `K1FlatSceneCfg` | Keep flat terrain and contact sensor behavior. |
-| `FlatEnvCfg` / `PlayFlatEnvCfg` | Names that mirror Isaac Lab's `*FlatEnvCfg` / `*FlatEnvCfg_PLAY` pattern | Keep registered Gym IDs stable or update registrations together. |
-| `JointPositionAction` or `joint_pos` naming | Prefer the Isaac Lab local convention used in the target file | Do not change action term order or `preserve_order=True`. |
-| Reward term names such as `joint_torques_l2` | Use Isaac Lab-style names when the helper semantics match | Do not rename K1-specific helpers into generic names if semantics differ. |
-| Grouped K1 constants near the top of the file | Keep constants, but group by role: action, observation, body names, default pose | Do not change joint order. |
-| Repeated `SceneEntityCfg` blocks | Extract local constants only if it improves clarity | Keep explicit scoping and `preserve_order` where required. |
-| `IdealFlatForward*` and `IdealFlatCommandRandom*` variants | Move or name them as debug/check variants | Avoid mixing debug variants with the main deploy task behavior. |
-
-## Extra Or Suspicious Items To Review Before Refactor
-
-These are not necessarily wrong, but they are not clearly required by the
-Isaac Lab-to-K1 design difference alone.
-
-| Item | Why review it |
+| 種別 | 根拠 |
 | --- | --- |
-| `K1_WALK_LEG_JOINT_NAMES` | Defined but currently unused. Remove it or use it in a scoped reward/event if needed. |
-| `IdealFlatForward*` and `IdealFlatCommandRandom*` classes | Useful for checks, but they make the main task file noisy. Consider moving debug variants or documenting them. |
-| `clip_actions = None` in PPO config | This may be intentional for export/deploy compatibility. Confirm before changing. |
-| `empirical_normalization = True` | Behavior differs from Isaac Lab G1/H1 examples. Keep if training depends on it; otherwise test both. |
-| Removed Isaac Lab license headers in locomotion files | If substantial code remains derived from Isaac Lab, attribution and license handling should be reviewed. |
+| Isaac Lab 共通 velocity cfg | `IsaacLab/source/isaaclab_tasks/isaaclab_tasks/manager_based/locomotion/velocity/velocity_env_cfg.py` |
+| Isaac Lab G1 cfg | `IsaacLab/source/isaaclab_tasks/isaaclab_tasks/manager_based/locomotion/velocity/config/g1/{rough_env_cfg.py,flat_env_cfg.py,agents/rsl_rl_ppo_cfg.py,__init__.py}` |
+| Isaac Lab H1 cfg | `IsaacLab/source/isaaclab_tasks/isaaclab_tasks/manager_based/locomotion/velocity/config/h1/{rough_env_cfg.py,flat_env_cfg.py,agents/rsl_rl_ppo_cfg.py,__init__.py}` |
+| K1 標準移植先 | `source/booster_train/booster_train/tasks/manager_based/locomotion/velocity/config/k1/{flat_env_cfg.py,agents/rsl_rl_ppo_cfg.py,__init__.py}` |
+| K1 MDP helper | `source/booster_train/booster_train/tasks/manager_based/locomotion/velocity/mdp/{observations.py,rewards.py}` |
+| K1 移植元 | `source/booster_train/booster_train/tasks/manager_based/locomotion/robots/k1/walk/{env_cfg.py,ppo_cfg.py}` |
 
-## Refactor Rule
+Digit / Cassie / direct humanoid / humanoid_amp / classic humanoid は今回の主比較対象ではありません。二足歩行 task ではありますが、今回の K1 移植方針は Isaac Lab の `manager_based/locomotion/velocity` にある G1/H1 の構成へ寄せるものです。
 
-When aligning K1 walk code style to Isaac Lab:
+## Isaac Lab 標準と同じ部分
 
-1. Preserve all rows marked `Keep? = Yes` unless a separate behavior-change
-   decision is made.
-2. Prefer Isaac Lab naming and class layout only where it does not alter the
-   actor input, critic input, action order, reward values, command
-   distribution, or termination conditions.
-3. Treat observation shape as an external interface:
-   the actor input remains 69 values per frame and 690 values after 10-frame
-   flattening.
-4. Treat K1 joint order and `preserve_order=True` as deployment-critical.
-5. Any change that reintroduces `base_lin_vel` to the actor is a behavior
-   change, not a style refactor.
+| 領域 | Isaac Lab G1/H1 | K1 flat velocity | 判断 | 根拠 |
+| --- | --- | --- | --- | --- |
+| task family | `manager_based/locomotion/velocity` の velocity tracking task | 同じ velocity tracking task として `locomotion/velocity/config/k1` に配置 | 同じ | G1/H1 `config/{g1,h1}`、K1 `config/k1` |
+| env base | `ManagerBasedRLEnvCfg` + `Scene/Commands/Actions/Observations/Event/Rewards/Terminations/Curriculum` | 同じ manager-based cfg 群を定義 | 同じ | `velocity_env_cfg.py`, `flat_env_cfg.py` |
+| Gym ID 型 | `Isaac-Velocity-Flat-G1-v0`, `Isaac-Velocity-Flat-H1-v0` | `Booster-Velocity-Flat-K1-v0` | 同じ命名型 | `config/{g1,h1}/__init__.py`, `config/k1/__init__.py` |
+| entry point | `isaaclab.envs:ManagerBasedRLEnv` | 同じ | 同じ | 各 `__init__.py` |
+| flat terrain | G1/H1 flat は plane、height scanner 無効 | K1 は flat plane のみ、height scanner なし | 最終挙動は同じ | G1/H1 `flat_env_cfg.py`, K1 `K1FlatSceneCfg` |
+| 主要 tracking reward | `track_lin_vel_xy_yaw_frame_exp`, `track_ang_vel_z_world_exp` | 同じ helper を使用 | 同じ family | G1/H1 `G1Rewards` / `H1Rewards`, K1 `RewardsCfg` |
+| 二足歩行 reward | `feet_air_time_positive_biped`, `feet_slide`, `termination_penalty` | 同じ helper family を使用 | 同じ family | G1/H1 reward cfg, K1 reward cfg |
+| PPO algorithm skeleton | RSL-RL PPO、`num_steps_per_env=24`, adaptive schedule, `lr=1e-3`, `gamma=0.99`, `lam=0.95` | 同じ基本 skeleton | 同じ | 各 `agents/rsl_rl_ppo_cfg.py` |
+
+## K1 で意図的に違う部分
+
+| 領域 | Isaac Lab G1/H1 velocity | K1 flat velocity | 判断 | 根拠 |
+| --- | --- | --- | --- | --- |
+| cfg 構造 | 共通 rough cfg を持ち、G1/H1 rough が継承し、flat は rough から override | K1 は flat-only を直接定義 | 残す | 今回は K1 flat だけが対象で、rough / height scanner を移植しないため |
+| Gym 登録数 | G1/H1 は rough/flat の train/play を登録 | K1 は flat train/play のみ登録 | 残す | `Booster-Velocity-Flat-K1-v0`, `Booster-Velocity-Flat-K1-Play-v0` のみに絞るため |
+| skrl 登録 | G1/H1 は `skrl_cfg_entry_point` も登録 | K1 は RSL-RL cfg のみ | 残す | 既存 K1 学習は RSL-RL 前提で、skrl config は未用意 |
+| actor observation | term 分割: `base_lin_vel`, `base_ang_vel`, `projected_gravity`, command, joint pos/vel, last action、rough では height scan | `k1_deploy_locomotion_observation` 1本にまとめる | 残す | export/deploy 入力契約を固定するため |
+| actor の base linear velocity | policy observation に `base_lin_vel` を入れる | actor には `base_lin_vel` / `root_lin_vel_b` を入れない | 残す | 実機で simulation truth 相当の base linear velocity を直接安定取得しない前提 |
+| actor 履歴 | 標準 flat cfg では flatten 履歴を使わない | 1フレーム 69 次元、10フレーム flatten 後 690 次元 | 残す | base linear velocity なしで運動状態を推定しやすくするため |
+| critic observation | G1/H1 の該当 cfg には separate critic group がない | `critic` group を追加し、actor obs + `base_lin_vel` + 足接触を使う | 残す | asymmetric actor-critic。actor は deploy 可能なまま、critic だけ学習中の privileged 情報を使う |
+| observation corruption | G1/H1 train は `enable_corruption=True`、play で無効化 | K1 は policy/critic とも corruption 無効 | 残す | deploy 互換観測を決定的に保つ。ノイズ注入を戻す場合は挙動変更として扱う |
+| action 関節指定 | `joint_names=[".*"]`, scale `0.5`。asset に腕があれば腕も action に含む | deploy 順序の 20 関節を明示、`preserve_order=True`, scale `0.25` | 残す | action 順序と scale を実機 controller / export policy と一致させるため |
+| 腕 action | G1/H1 も腕 action を含み得る。`joint_deviation_arms` で default 姿勢からのずれを抑える | K1 も腕を action に含め、腕8DoFを index 指定して `arm_joint_deviation_l1`, `arm_action_l2`, `arm_action_rate_l2` で抑える | 残す | K1 は腕を姿勢安定用の可動質量として過剰に使うことがあるため、deploy action 順序のまま腕の大振りを抑える |
+| command heading | 共通 cfg は heading command をサポートし、G1/H1 で range を調整 | `heading_command=False`, `rel_heading_envs=0.0` | 残す | K1 deploy policy は direct velocity command を受ける設計 |
+| command range | G1 flat は x `(0,1)`, y `(-0.5,0.5)`, yaw `(-1,1)`。H1 は y `0` | K1 は x/y/yaw すべて `(-1,1)`, `rel_standing_envs=0.2` | 残すが要実験レビュー | 旧 K1 walk の command randomization を維持。後退・横移動まで含むため G1/H1 flat より広い |
+| contact body | G1/H1 は torso / ankle link regex | K1 は base `Trunk`, 足 `left_foot_link` / `right_foot_link` | 残す | K1 URDF body 名に合わせるため |
+| termination | G1/H1 は timeout + torso contact | K1 は timeout + `Trunk` contact + `bad_orientation(limit_angle=0.8)` | 残す | 旧 K1 walk の転倒判定を維持 |
+| play randomization | G1/H1 flat play は corruption と一部 event を無効化 | K1 play は physics material / mass / reset / push など randomization event を無効化 | 残す | play/export で挙動確認しやすくするため |
+
+## 要レビューな差分
+
+以下は今回のリファクタでは既存 K1 walk から維持します。ただし、Isaac Lab 標準に完全に寄せるか、学習安定性を優先して K1 独自値を残すかは、別途実験でレビューする余地があります。
+
+| 領域 | Isaac Lab G1/H1 velocity | K1 flat velocity | 今回の扱い | 根拠 |
+| --- | --- | --- | --- | --- |
+| event randomization | 共通 cfg には friction, base mass, base COM, external force, reset, push がある。G1/H1 では push/add mass/base COM を無効化し、reset velocity を 0 にする | K1 は friction range を広げ、`Trunk` mass randomization、reset velocity randomization、push `(-1,1)` を有効。base COM / external force は持たない | 維持、要レビュー | 旧 K1 walk の domain randomization を維持しているが、G1/H1 より強い |
+| torque helper | 標準は generic `joint_torques_l2` | K1 は `k1_joint_torques_l2` を使う | 維持、要整理 | 実装は generic に近い。K1 scope / naming のために残すかは後で整理可能 |
+| energy reward | G1/H1 標準 reward には同種の `joint_energy` term がない | K1 は `k1_joint_energy` を追加 | 維持、要レビュー | 旧 K1 walk の省エネ penalty を維持 |
+| foot/contact 追加 reward | G1/H1 は `feet_air_time`, `feet_slide`, ankle limit, joint deviation が中心 | K1 は `feet_force`, `feet_too_near`, `feet_stumble`, all non-foot `undesired_contacts` を追加 | 維持、要レビュー | K1 の足幅・接触・転倒傾向に合わせた追加項目 |
+| joint deviation | G1/H1 は hip/arms/torso、G1 は fingers も default deviation を抑える | K1 は腕 deviation を明示し、hip/torso deviation は追加していない | 維持、要レビュー | K1 では腕暴れ抑制を優先。hip/torso deviation を足すなら挙動変更 |
+| reward weights | G1/H1 flat は robot ごとに weights を override。例: G1 flat `feet_air_time=0.75`, H1 flat `feet_air_time=1.0` | K1 は旧 K1 walk weights を維持。例: `feet_air_time=0.5`, `lin_vel_z_l2=-1.0`, `action_rate_l2=-0.01` | 維持、要実験レビュー | 既存 K1 checkpoint の挙動を変えないため |
+| PPO hidden dims | G1 rough/H1 rough は `[512,256,128]`、G1 flat は `[256,128,128]`、H1 flat は `[128,128,128]` | K1 flat は `[512,256,128]` | 維持、要レビュー | 旧 K1 walk の network size を維持。G1/H1 flat より大きい |
+| PPO iterations | G1 flat `1500`, H1 flat `1000`, rough `3000` | K1 `50000` | 維持、要実験レビュー | K1 の既存学習予算を維持 |
+| PPO normalization | G1/H1 RSL-RL は `empirical_normalization=False` | K1 は `True` | 維持、要レビュー | 旧 K1 walk の設定を維持 |
+| PPO entropy | G1 `0.008`, H1 `0.01` | K1 `0.005` | 維持、要レビュー | 旧 K1 walk の設定を維持 |
+| `clip_actions` | G1/H1 RSL-RL cfg では明示なし | K1 は `clip_actions=None` を明示 | 維持、要確認 | 旧 K1 walk の挙動維持。RSL-RL wrapper 側の解釈を変えない |
+
+## 旧 K1 walk から維持しているもの
+
+| 項目 | 扱い |
+| --- | --- |
+| deploy-compatible actor obs | `root_ang_vel_b`, `projected_gravity_b`, command, joint pos rel, scaled joint vel, last action の 69 次元を維持 |
+| actor history | 10フレーム flatten、690 次元を維持 |
+| actor に入れない情報 | `base_lin_vel` / `root_lin_vel_b` は actor に入れない |
+| critic privileged obs | `base_lin_vel` と足接触を critic のみへ追加 |
+| action order | K1 deploy 順序の 20 関節と `preserve_order=True` を維持 |
+| command randomization | 旧 K1 walk の x/y/yaw `(-1,1)` と standing env ratio を維持 |
+| reward set/weights | 旧 K1 walk の main flat task の reward set/weights を維持 |
+| termination | `bad_orientation(limit_angle=0.8)` を維持 |
+| PPO主要値 | `max_iterations=50000`, `empirical_normalization=True`, `clip_actions=None`, `[512,256,128]` を維持 |
+
+## 今回移植しないもの
+
+| 項目 | 扱い | 理由 |
+| --- | --- | --- |
+| `Booster-K1-Locomotion-*` Gym ID | 登録しない | Isaac Lab 標準型の Gym ID へ寄せるため |
+| `IdealFlatForward*` | 移植しない | debug/check variant であり、本命 flat velocity task ではないため |
+| `IdealFlatCommandRandom*` | 移植しない | debug/check variant であり、本命 flat velocity task ではないため |
+| rough variant | 作らない | 今回は flat velocity task のみ対象 |
+| height scanner | 作らない | rough terrain policy ではなく flat/deploy 重視 |
+| actor 側 `base_lin_vel` | 追加しない | deploy 入力契約を変える挙動変更になるため |
+| `K1_WALK_LEG_JOINT_NAMES` | 移植しない | 未使用 constant のため |
+
+## 確認コマンド
+
+```bash
+rg -n 'joint_names=\\[\"\\.\\*\"\\]|joint_deviation_arms|arm_action_l2|arm_action_rate_l2' \
+  /mnt/ssd2/booster/IsaacLab/source/isaaclab_tasks/isaaclab_tasks/manager_based/locomotion/velocity \
+  source/booster_train/booster_train/tasks/manager_based/locomotion/velocity
+
+rg -n 'base_lin_vel|root_lin_vel_b|k1_deploy_locomotion_observation|k1_privileged_locomotion_observation' \
+  source/booster_train/booster_train/tasks/manager_based/locomotion/velocity
+
+python -m compileall source/booster_train/booster_train/tasks/manager_based/locomotion/velocity
+```
