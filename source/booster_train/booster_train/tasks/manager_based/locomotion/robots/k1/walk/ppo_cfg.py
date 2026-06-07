@@ -33,3 +33,17 @@ class PPORunnerCfg(RslRlOnPolicyRunnerCfg):
         desired_kl=0.01,
         max_grad_norm=1.0,
     )
+
+
+@configclass
+class IdealFlatForwardPPORunnerCfg(PPORunnerCfg):
+    """PPO runner configuration for the ideal flat-forward K1 check."""
+
+    experiment_name = "k1_locomotion_ideal_flat_forward"
+
+
+@configclass
+class IdealFlatCommandRandomPPORunnerCfg(PPORunnerCfg):
+    """PPO runner configuration for the ideal flat command-random K1 check."""
+
+    experiment_name = "k1_locomotion_ideal_flat_command_random"

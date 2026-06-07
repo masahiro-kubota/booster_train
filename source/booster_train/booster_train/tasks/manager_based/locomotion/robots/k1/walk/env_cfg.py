@@ -5,6 +5,7 @@ from dataclasses import MISSING
 import isaaclab.sim as sim_utils
 from isaaclab.assets import ArticulationCfg, AssetBaseCfg
 from isaaclab.envs import ManagerBasedRLEnvCfg
+from isaaclab.managers import CurriculumTermCfg as CurrTerm
 from isaaclab.managers import EventTermCfg as EventTerm
 from isaaclab.managers import ObservationGroupCfg as ObsGroup
 from isaaclab.managers import ObservationTermCfg as ObsTerm
@@ -494,6 +495,16 @@ class CurriculumCfg:
 
 
 @configclass
+class IdealFlatForwardCurriculumCfg(CurriculumCfg):
+    """Reset-time metrics for the fixed-forward ideal flat check."""
+
+    flat_forward_metrics = CurrTerm(
+        func=mdp.k1_flat_forward_metrics,
+        params={"command_name": "base_velocity", "asset_cfg": SceneEntityCfg("robot")},
+    )
+
+
+@configclass
 class FlatEnvCfg(ManagerBasedRLEnvCfg):
     """Flat-terrain K1 velocity-tracking environment."""
 
@@ -551,3 +562,71 @@ class PlayFlatEnvCfg(FlatEnvCfg):
         self.events.reset_base = None
         self.events.reset_robot_joints = None
         self.events.push_robot = None
+
+
+@configclass
+class IdealFlatForwardEnvCfg(FlatEnvCfg):
+    """Minimal fixed-forward K1 locomotion environment."""
+
+    curriculum: IdealFlatForwardCurriculumCfg = IdealFlatForwardCurriculumCfg()
+
+    def __post_init__(self):
+        super().__post_init__()
+
+        self.events.physics_material = None
+        self.events.add_base_mass = None
+        self.events.push_robot = None
+        self.events.reset_base.params["pose_range"] = {"x": (0.0, 0.0), "y": (0.0, 0.0), "yaw": (0.0, 0.0)}
+        self.events.reset_base.params["velocity_range"] = {
+            "x": (0.0, 0.0),
+            "y": (0.0, 0.0),
+            "z": (0.0, 0.0),
+            "roll": (0.0, 0.0),
+            "pitch": (0.0, 0.0),
+            "yaw": (0.0, 0.0),
+        }
+        self.events.reset_robot_joints.params["position_range"] = (1.0, 1.0)
+        self.events.reset_robot_joints.params["velocity_range"] = (0.0, 0.0)
+
+        self.commands.base_velocity.debug_vis = False
+        self.commands.base_velocity.rel_standing_envs = 0.0
+        self.commands.base_velocity.rel_heading_envs = 0.0
+        self.commands.base_velocity.heading_command = False
+        self.commands.base_velocity.ranges.lin_vel_x = (0.3, 0.3)
+        self.commands.base_velocity.ranges.lin_vel_y = (0.0, 0.0)
+        self.commands.base_velocity.ranges.ang_vel_z = (0.0, 0.0)
+
+
+@configclass
+class IdealFlatForwardPlayEnvCfg(IdealFlatForwardEnvCfg):
+    """Single-environment play/export variant of the ideal flat-forward task."""
+
+    def __post_init__(self):
+        super().__post_init__()
+        self.scene.num_envs = 1
+
+
+@configclass
+class IdealFlatCommandRandomEnvCfg(IdealFlatForwardEnvCfg):
+    """Ideal flat K1 locomotion environment with the original randomized command distribution."""
+
+    def __post_init__(self):
+        super().__post_init__()
+
+        self.commands.base_velocity.resampling_time_range = (10.0, 10.0)
+        self.commands.base_velocity.debug_vis = True
+        self.commands.base_velocity.rel_standing_envs = 0.2
+        self.commands.base_velocity.rel_heading_envs = 0.0
+        self.commands.base_velocity.heading_command = False
+        self.commands.base_velocity.ranges.lin_vel_x = (-1.0, 1.0)
+        self.commands.base_velocity.ranges.lin_vel_y = (-1.0, 1.0)
+        self.commands.base_velocity.ranges.ang_vel_z = (-1.0, 1.0)
+
+
+@configclass
+class IdealFlatCommandRandomPlayEnvCfg(IdealFlatCommandRandomEnvCfg):
+    """Single-environment play/export variant of the command-random ideal flat task."""
+
+    def __post_init__(self):
+        super().__post_init__()
+        self.scene.num_envs = 1
