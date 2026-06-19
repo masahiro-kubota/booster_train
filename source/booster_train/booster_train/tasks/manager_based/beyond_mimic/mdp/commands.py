@@ -291,6 +291,9 @@ class MotionCommand(CommandTerm):
         if self.cfg.play:
             self.time_steps[env_ids] = 0
 
+        if not self.cfg.reset_to_motion_state:
+            return
+
         root_pos = self.body_pos_w[:, 0].clone()
         root_ori = self.body_quat_w[:, 0].clone()
         root_lin_vel = self.body_lin_vel_w[:, 0].clone()
@@ -401,6 +404,7 @@ class MotionCommandCfg(CommandTermCfg):
     class_type: type = MotionCommand
 
     play: bool = False
+    reset_to_motion_state: bool = True
 
     asset_name: str = MISSING
 
