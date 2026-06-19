@@ -43,6 +43,9 @@ docker/.container.cfg
 docker/artifacts/
 *.tmp
 
+# Local generated experiment task outputs
+source/booster_train/booster_train/tasks/manager_based/beyond_mimic/robots/k1/kimodo_output/
+
 # Doc Outputs
 **/docs/_build/*
 **/generated/*
