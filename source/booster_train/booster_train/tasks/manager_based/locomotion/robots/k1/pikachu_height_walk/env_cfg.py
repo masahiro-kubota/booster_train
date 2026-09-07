@@ -101,7 +101,10 @@ class HeightWalkEnvCfg(IdleWalkEnvCfg):
 
     def __post_init__(self):
         super().__post_init__()
-        self.scene.num_envs = 1024
+        # RTX 4090 / 32 GiB host benchmarked with video recording enabled.
+        # 6,144 environments exhausted host-memory headroom and failed during
+        # PhysX startup, while 4,096 completed with about 9 GiB available.
+        self.scene.num_envs = 4096
 
 
 @configclass
