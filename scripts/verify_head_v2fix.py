@@ -1,7 +1,10 @@
-"""Check in PhysX that a HeadV2Fix task (pikachu_idle_scale0842_head_v2fix) set up its head and rewards.
+"""Check in PhysX that a HeadV2Fix task (pikachu_idle_scale0842_head_v2fix) or HeadV2Sim-HeadOri
+(pikachu_idle_scale0842_head_v2sim_headori) set up its head and rewards.
 
-Head_2 fixed at 2.0 kg in every environment with the inertia scaled from the mass file and the COM at the file's
-value, the neck gains, action scale and target clip, and the reward terms of the variant (HeadOri or Generic).
+HeadV2Fix: Head_2 fixed at 2.0 kg in every environment with the inertia scaled from the mass file and the COM at the
+file's value. HeadV2Sim-HeadOri: Head_2 mass spread over the randomization range with the inertia scaled per
+environment and the COM within the range around the file's value. Both: the neck gains, action scale and target clip,
+and the reward terms of the variant (HeadOri or Generic).
 
     env -u PYTHONPATH <isaaclab python> scripts/verify_head_v2fix.py --headless --task Booster-K1-Pikachu_Idle-Scale0842-HeadV2Fix-HeadOri-v0
 """
@@ -36,11 +39,19 @@ def main():
         env.reset(); robot = env.scene['robot']; view = robot.root_physx_view; h2 = robot.body_names.index('Head_2')
         wanted = json.loads(Path(v2.MASS_FILE).read_text())['links']['Head_2']['combined']
         mass = view.get_masses()[:, h2].numpy()
-        np.testing.assert_allclose(mass, fix.HEAD_MASS_KG, rtol=1e-6)
         inert = view.get_inertias()[:, h2].numpy(); inert0 = robot.data.default_inertia[:, h2].cpu().numpy()
-        np.testing.assert_allclose(inert, inert0 * fix.HEAD_MASS_KG / wanted['mass_kg'], rtol=1e-4, atol=1e-8)
         com = view.get_coms()[:, h2, :3].numpy()
-        np.testing.assert_allclose(com, np.broadcast_to(wanted['com_m'], com.shape), atol=1e-6)
+        if 'HeadV2Fix' in args.task:
+            np.testing.assert_allclose(mass, fix.HEAD_MASS_KG, rtol=1e-6)
+            np.testing.assert_allclose(com, np.broadcast_to(wanted['com_m'], com.shape), atol=1e-6)
+        else:
+            lo, hi = v2.HEAD_MASS_KG
+            assert mass.min() >= lo - 1e-6 and mass.max() <= hi + 1e-6 and mass.max() - mass.min() > 0.8 * (hi - lo), (mass.min(), mass.max())
+            shift = com - np.array(wanted['com_m'])
+            for k, ax in enumerate('xyz'):
+                a, b = v2.HEAD_COM_RANGE_M[ax]
+                assert shift[:, k].min() >= a - 1e-6 and shift[:, k].max() <= b + 1e-6 and np.ptp(shift[:, k]) > 0.8 * (b - a), (ax, shift[:, k].min(), shift[:, k].max())
+        np.testing.assert_allclose(inert, inert0 * mass[:, None] / wanted['mass_kg'], rtol=1e-4, atol=1e-8)
         print(f"[verify] Head_2 {mass.min():.3f}..{mass.max():.3f} kg over {len(mass)} envs, inertia scaled, "
               f"com {np.round(com[0] * 1000, 2).tolist()} mm (file {np.round(np.array(wanted['com_m']) * 1000, 2).tolist()})  OK")
 
