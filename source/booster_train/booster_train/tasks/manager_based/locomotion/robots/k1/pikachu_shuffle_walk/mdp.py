@@ -72,9 +72,17 @@ def head_orientation(env, std: float):
     return torch.exp(-quat_error_magnitude(robot.data.body_quat_w[:, head], target).square() / std ** 2)
 
 
+def _sensor_feet(sensor):
+    # ContactSensor.body_names reads the prim paths of every environment (about 70 ms at 10240 envs), so look the feet up once.
+    ids = getattr(sensor, "_shuffle_walk_feet", None)
+    if ids is None:
+        ids = sensor._shuffle_walk_feet = [sensor.body_names.index(n) for n in FEET]
+    return ids
+
+
 def foot_contact(env, threshold: float = 10.0):
-    sensor = env.scene["contact_forces"]; ids = [sensor.body_names.index(n) for n in FEET]
-    return sensor.data.net_forces_w_history[:, :, ids].norm(dim=-1).amax(dim=1) > threshold
+    sensor = env.scene["contact_forces"]
+    return sensor.data.net_forces_w_history[:, :, _sensor_feet(sensor)].norm(dim=-1).amax(dim=1) > threshold
 
 
 def contact_match(env):
