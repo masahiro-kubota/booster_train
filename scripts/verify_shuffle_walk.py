@@ -2,9 +2,11 @@
 
 1. The velocity command stays within the gait library ranges and the gait phase advances by step_dt / cycle.
 2. After reset, joint positions equal the reference (except the Idle starts, which equal reset_pose.npz).
-3. Replaying the reference joint positions open loop through the PD targets for 0.3 s from the reset keeps the torso height
-   within 30 mm of the reference and the feet in contact as the reference says for most of the steps (joint order, root height
-   and foot placement agree with the ground).
+3. Replaying the reference joint positions open loop through the PD targets from the reset: one step after the reset the torso
+   height is within 10 mm of the reference (root height agrees with the ground) and, where the reference has one foot in swing,
+   that foot is the higher one (contact columns follow the feet). Over 0.3 s the stance contact and the sag are only printed,
+   next to the Idle starts: open loop, the crouched pose bounces after the reset and sags about 45 mm under the leg PD gains,
+   more than the 12 mm lift, so the swing feet stay on the ground until a policy compensates.
 4. The head orientation reward's neck frame reproduces Head_2 from the torso and the actual neck joints (frame convention).
 5. Head settings (neck gains, clip, Head_2 mass range) and the reward terms.
 
@@ -44,25 +46,35 @@ def main():
         print(f'[verify] reset: {int(idle.sum())} Idle starts, reference starts max joint error {on_ref[~idle].max():.2e} rad')
         assert on_ref[~idle].max() < 1e-3
         term = env.action_manager.get_term('joint_pos'); scale = term._scale; offset = term._offset
-        phase0 = gait.phase.clone(); hz, contact_ok, steps = [], [], int(round(0.3 / env.step_dt))
+        phase0 = gait.phase.clone(); hz, stance_ok, steps = [], [], int(round(0.3 / env.step_dt))
         h2 = robot.body_names.index('Head_2'); frame_err, head_err = [], []
-        for _ in range(steps):
+        feet = [robot.body_names.index(n) for n in walk.FEET]
+        for k in range(steps):
             action = (gait.ref['joint_pos'] - offset) / scale
             env.step(action)
+            if k == 0:
+                rc = gait.ref['contact'][~idle] > 0.5; single = rc.sum(-1) == 1
+                fz = robot.data.body_link_pos_w[~idle][:, feet, 2]
+                lift = (fz[single] * (~rc[single]).float()).sum(-1) - (fz[single] * rc[single].float()).sum(-1)
+                hz0 = (robot.data.root_pos_w[:, 2] - gait.ref_root_pos_w[:, 2])[~idle].median()
             own = quat_mul(robot.data.root_quat_w, walk.neck_frame(env, robot.data.joint_pos))
             frame_err.append(quat_error_magnitude(robot.data.body_quat_w[:, h2], own))
             head_err.append(torch.sqrt(-torch.log(walk.head_orientation(env, std=1.0).clamp(min=1e-12))))
-            hz.append((robot.data.root_pos_w[:, 2] - gait.ref_root_pos_w[:, 2]).abs())
-            contact_ok.append((walk.foot_contact(env) == (gait.ref['contact'] > 0.5)).float().mean(-1))
+            hz.append(robot.data.root_pos_w[:, 2] - gait.ref_root_pos_w[:, 2])
+            rc_all = gait.ref['contact'] > 0.5
+            stance_ok.append((walk.foot_contact(env) & rc_all).float().sum(-1) / rc_all.float().sum(-1).clamp(min=1))
         dphase = ((gait.phase - phase0) % 1.0)
         expect = (steps * env.step_dt / lib.cycle_s) % 1.0
         alive = ~env.termination_manager.terminated
         assert torch.allclose(dphase[alive], torch.full_like(dphase[alive], expect), atol=1e-4), (dphase[:4], expect)
         print(f'[verify] phase advanced {expect:.3f} cycle in {steps} steps  OK')
-        hz = torch.stack(hz); cm = torch.stack(contact_ok)
-        print(f'[verify] open-loop replay 0.3 s (reference starts): torso height error median {hz[:, ~idle].median()*1000:.1f} mm, '
-              f'max {hz[:, ~idle].amax()*1000:.1f} mm; foot contact agreement {cm[:, ~idle].mean():.2f}')
-        assert hz[:, ~idle].median() < 0.03 and cm[:, ~idle].mean() > 0.7
+        print(f'[verify] one step after reset (reference starts): torso height error median {hz0*1000:+.1f} mm; swing foot above the '
+              f'stance foot by {lift.mean()*1000:+.1f} mm on average ({int(single.sum())} single-support starts)')
+        assert hz0.abs() < 0.01 and lift.mean() > 0.002
+        sag = torch.stack(hz)[-1]; stance = torch.stack(stance_ok)
+        print(f'[verify] open-loop replay 0.3 s (no policy): stance feet in contact {stance[:, ~idle].mean():.2f} reference starts, '
+              f'{stance[:, idle].mean():.2f} Idle starts; torso sag at the end {-sag[~idle].median()*1000:.1f} mm and '
+              f'{-sag[idle].median()*1000:.1f} mm')
         frame_err = torch.stack(frame_err).amax().item(); head_err = torch.stack(head_err)[:, ~idle]
         print(f'[verify] neck frame vs Head_2 max {np.degrees(frame_err):.3f} deg; open-loop head orientation error median '
               f'{np.degrees(head_err.median().item()):.1f} deg (reference neck 20 deg up, clipped at 17 deg)')
