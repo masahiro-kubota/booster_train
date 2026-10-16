@@ -110,14 +110,16 @@ class TerminationsCfg:
     fallen = DoneTerm(func=mdp.fallen)
 
 
-def idle_default_joint_pos(urdf_path: str) -> dict[str, float]:
+def idle_default_joint_pos(urdf_path: str, margins: dict[str, float] | None = None) -> dict[str, float]:
     """Idle frame 0 joint positions as the default (action offset). The pose sits on the URDF limits of the neck pitch, shoulder
-    rolls, elbow pitches and right ankle roll, and the articulation rejects defaults outside the limits, so keep 1 mrad inside."""
+    rolls, elbow pitches and right ankle roll, and the articulation rejects defaults outside the limits, so keep 1 mrad inside
+    (or margins[joint] rad)."""
     with np.load(IDLE_POSE, allow_pickle=False) as z:
         pose = dict(zip(z["joint_names"].tolist(), z["joint_pos"].tolist()))
     limits = {j.get("name"): (float(lim.get("lower")), float(lim.get("upper")))
               for j in ET.parse(urdf_path).getroot().iter("joint") if (lim := j.find("limit")) is not None}
-    return {n: min(max(q, limits[n][0] + 1e-3), limits[n][1] - 1e-3) for n, q in pose.items()}
+    m = {n: (margins or {}).get(n, 1e-3) for n in pose}
+    return {n: min(max(q, limits[n][0] + m[n]), limits[n][1] - m[n]) for n, q in pose.items()}
 
 
 def use_v1_head(cfg):
