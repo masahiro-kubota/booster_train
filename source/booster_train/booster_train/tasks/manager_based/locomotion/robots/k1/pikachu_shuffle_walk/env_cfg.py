@@ -3,11 +3,16 @@
 As Disney's BDX and Olaf walking policies: the reference (joint positions, torso pose and velocity, foot contacts) is looked
 up from densely sampled gait cycles and used only in the rewards; the actor sees the command, the phase, the torso yaw relative
 to the reference and proprioception. The head orientation is rewarded as in the Idle task, at the same share of the reward.
-The head is the v1 head on its current mount with the HeadV1Sim settings (neck kp 30, kd 3, firmware target clip, Head_2 mass
-2.5 to 5.0 kg and COM randomized around v1).
+The joint position actions are offsets from the Idle frame 0 pose, the stance of the gait library, instead of the K1 default
+(straight legs, arms down), so a zero action holds the crouch, the Pikachu arms and the neck 20 deg up. The head is the v1
+head on its current mount with the HeadV1Sim settings (neck kp 30, kd 3, firmware target clip, Head_2 mass 2.5 to 5.0 kg and
+COM randomized around v1).
 """
+import xml.etree.ElementTree as ET
 from dataclasses import fields
 from pathlib import Path
+
+import numpy as np
 
 import isaaclab.envs.mdp as base
 from isaaclab.managers import EventTermCfg as EventTerm, ObservationGroupCfg as ObsGroup
@@ -105,6 +110,16 @@ class TerminationsCfg:
     fallen = DoneTerm(func=mdp.fallen)
 
 
+def idle_default_joint_pos(urdf_path: str) -> dict[str, float]:
+    """Idle frame 0 joint positions as the default (action offset). The pose sits on the URDF limits of the neck pitch, shoulder
+    rolls, elbow pitches and right ankle roll, and the articulation rejects defaults outside the limits, so keep 1 mrad inside."""
+    with np.load(IDLE_POSE, allow_pickle=False) as z:
+        pose = dict(zip(z["joint_names"].tolist(), z["joint_pos"].tolist()))
+    limits = {j.get("name"): (float(lim.get("lower")), float(lim.get("upper")))
+              for j in ET.parse(urdf_path).getroot().iter("joint") if (lim := j.find("limit")) is not None}
+    return {n: min(max(q, limits[n][0] + 1e-3), limits[n][1] - 1e-3) for n, q in pose.items()}
+
+
 def use_v1_head(cfg):
     """HeadV1Sim head: v1 (r27) inertial, neck gains, action scale and target clip, Head_2 mass and COM randomization."""
     source = cfg.scene.robot.spawn
@@ -134,6 +149,8 @@ class ShuffleWalkEnvCfg(TrackingEnvCfg):
         super().__post_init__()
         self.episode_length_s = 20.0
         self.scene.robot = BOOSTER_K1_CFG.replace(prim_path="{ENV_REGEX_NS}/Robot")
+        self.scene.robot.init_state = self.scene.robot.init_state.replace(
+            joint_pos=idle_default_joint_pos(self.scene.robot.spawn.asset_path))
         # The Idle pose and the gait reach the actual joint limits (e.g. the right ankle roll); penalize only beyond them.
         self.scene.robot.soft_joint_pos_limit_factor = 1.0
         self.scene.contact_forces.debug_vis = False

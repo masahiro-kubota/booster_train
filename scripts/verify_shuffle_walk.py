@@ -9,6 +9,9 @@
    more than the 12 mm lift, so the swing feet stay on the ground until a policy compensates.
 4. The head orientation reward's neck frame reproduces Head_2 from the torso and the actual neck joints (frame convention).
 5. Head settings (neck gains, clip, Head_2 mass range) and the reward terms.
+6. The action offset is the Idle frame 0 pose: with zero actions for 0.3 s from the reset, the arm and neck joints stay within
+   15 deg rms of the reference (with the K1 default as the offset, a zero action takes them 74 deg rms away, too far for the
+   joint reward).
 
     env -u PYTHONPATH <isaaclab python> scripts/verify_shuffle_walk.py --headless --num_envs 64
 """
@@ -26,6 +29,7 @@ import torch
 from isaaclab.utils.math import quat_error_magnitude, quat_mul
 import booster_train.tasks  # noqa: F401  (registers the tasks)
 from booster_train.tasks.manager_based.locomotion.robots.k1.pikachu_shuffle_walk import mdp as walk
+from booster_train.tasks.manager_based.locomotion.robots.k1.pikachu_shuffle_walk.env_cfg import UPPER_JOINTS
 from booster_train.tasks.manager_based.beyond_mimic.robots.k1.pikachu_idle_scale0842_head_v1sim_headori import env_cfg as v1
 from booster_train.tasks.manager_based.beyond_mimic.robots.k1.pikachu_idle_scale0842_head_v2sim import env_cfg as v2
 from isaaclab_tasks.utils import parse_env_cfg
@@ -46,6 +50,9 @@ def main():
         print(f'[verify] reset: {int(idle.sum())} Idle starts, reference starts max joint error {on_ref[~idle].max():.2e} rad')
         assert on_ref[~idle].max() < 1e-3
         term = env.action_manager.get_term('joint_pos'); scale = term._scale; offset = term._offset
+        # add_joint_default_pos shifts the offset by up to 10 mrad (calibration error); the limits keep it 1 mrad inside
+        np.testing.assert_allclose(offset.cpu().numpy(), gait.idle_joint_pos.expand_as(offset).cpu().numpy(), atol=0.012)
+        print(f'[verify] action offset = Idle frame 0 pose (max {(offset - gait.idle_joint_pos).abs().max()*1000:.1f} mrad)  OK')
         phase0 = gait.phase.clone(); hz, stance_ok, steps = [], [], int(round(0.3 / env.step_dt))
         h2 = robot.body_names.index('Head_2'); frame_err, head_err = [], []
         feet = [robot.body_names.index(n) for n in walk.FEET]
@@ -79,6 +86,13 @@ def main():
         print(f'[verify] neck frame vs Head_2 max {np.degrees(frame_err):.3f} deg; open-loop head orientation error median '
               f'{np.degrees(head_err.median().item()):.1f} deg (reference neck 20 deg up, clipped at 17 deg)')
         assert frame_err < np.radians(0.5)
+        env.reset(); upper = robot.find_joints(UPPER_JOINTS, preserve_order=True)[0]
+        for _ in range(steps):
+            env.step(torch.zeros_like(action))
+        up = (robot.data.joint_pos - gait.ref['joint_pos'])[:, upper].square().mean(-1).sqrt()
+        print(f'[verify] zero action 0.3 s: arm and neck joints off the reference by {np.degrees(up.median().item()):.1f} deg rms '
+              f'(median), {np.degrees(up.max().item()):.1f} deg max')
+        assert up.median() < np.radians(15)
         head = robot.actuators['head']
         np.testing.assert_allclose(head.stiffness.cpu().numpy(), v2.NECK_KP); np.testing.assert_allclose(head.damping.cpu().numpy(), v2.NECK_KD)
         mass = robot.root_physx_view.get_masses()[:, h2].numpy()
