@@ -1,9 +1,10 @@
-"""Rewards, observations and terminations of the shuffle walk: joint-space imitation of the gait library (as BDX), plus the
-hip-flexion limit that keeps the K1 thighs off the hard waist ring of the torso exterior."""
+"""Rewards, observations and terminations of the shuffle walk: joint-space imitation of the gait library (as BDX), the head
+orientation as in the Idle task, and the hip-flexion limit that keeps the K1 thighs off the hard waist ring of the torso exterior."""
 import math
 
 import torch
-from isaaclab.utils.math import quat_apply_inverse, quat_error_magnitude, euler_xyz_from_quat, wrap_to_pi
+from isaaclab.utils.math import (euler_xyz_from_quat, quat_apply_inverse, quat_error_magnitude, quat_from_euler_xyz, quat_inv,
+                                 quat_mul, wrap_to_pi, yaw_quat)
 
 FEET = ("left_foot_link", "right_foot_link")
 LEGS = r"^(Left|Right)_(Hip|Knee|Ankle)_.*"
@@ -51,6 +52,24 @@ def torso_lin_vel_xy(env, std: float):
 def torso_yaw_rate(env, std: float):
     error = env.scene["robot"].data.root_ang_vel_b[:, 2] - gait(env).ref["torso_ang_vel_b"][:, 2]
     return torch.exp(-error.square() / std ** 2)
+
+
+def neck_frame(env, joint_pos):
+    """Head_2 orientation relative to the torso for the given joint positions, Rz(AAHead_yaw) Ry(Head_pitch) (checked against the
+    Trunk and Head_2 orientations of the Idle motion)."""
+    yaw, pitch = _ids(env, ["AAHead_yaw", "Head_pitch"]); zero = torch.zeros_like(joint_pos[:, 0])
+    return quat_mul(quat_from_euler_xyz(zero, zero, joint_pos[:, yaw]), quat_from_euler_xyz(zero, joint_pos[:, pitch], zero))
+
+
+def head_orientation(env, std: float):
+    """Head_2 orientation against the reference torso orientation turned by the reference neck joints. As the Idle task's
+    motion_head_ori, the reference is turned by the yaw between the robot torso and the reference torso, so torso pitch and roll
+    errors count but a yaw lag behind the path frame does not."""
+    robot, g = env.scene["robot"], gait(env)
+    delta = yaw_quat(quat_mul(robot.data.root_quat_w, quat_inv(g.ref_root_quat_w)))
+    target = quat_mul(quat_mul(delta, g.ref_root_quat_w), neck_frame(env, g.ref["joint_pos"]))
+    head = robot.body_names.index("Head_2")
+    return torch.exp(-quat_error_magnitude(robot.data.body_quat_w[:, head], target).square() / std ** 2)
 
 
 def foot_contact(env, threshold: float = 10.0):

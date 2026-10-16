@@ -5,7 +5,8 @@
 3. Replaying the reference joint positions open loop through the PD targets for 0.3 s from the reset keeps the torso height
    within 30 mm of the reference and the feet in contact as the reference says for most of the steps (joint order, root height
    and foot placement agree with the ground).
-4. Head settings (neck gains, clip, Head_2 mass range) and the reward terms.
+4. The head orientation reward's neck frame reproduces Head_2 from the torso and the actual neck joints (frame convention).
+5. Head settings (neck gains, clip, Head_2 mass range) and the reward terms.
 
     env -u PYTHONPATH <isaaclab python> scripts/verify_shuffle_walk.py --headless --num_envs 64
 """
@@ -20,6 +21,7 @@ args = parser.parse_args(); app = AppLauncher(args).app
 import gymnasium as gym
 import numpy as np
 import torch
+from isaaclab.utils.math import quat_error_magnitude, quat_mul
 import booster_train.tasks  # noqa: F401  (registers the tasks)
 from booster_train.tasks.manager_based.locomotion.robots.k1.pikachu_shuffle_walk import mdp as walk
 from booster_train.tasks.manager_based.beyond_mimic.robots.k1.pikachu_idle_scale0842_head_v1sim_headori import env_cfg as v1
@@ -43,10 +45,13 @@ def main():
         assert on_ref[~idle].max() < 1e-3
         term = env.action_manager.get_term('joint_pos'); scale = term._scale; offset = term._offset
         phase0 = gait.phase.clone(); hz, contact_ok, steps = [], [], int(round(0.3 / env.step_dt))
-        sensor = env.scene['contact_forces']
+        h2 = robot.body_names.index('Head_2'); frame_err, head_err = [], []
         for _ in range(steps):
             action = (gait.ref['joint_pos'] - offset) / scale
             env.step(action)
+            own = quat_mul(robot.data.root_quat_w, walk.neck_frame(env, robot.data.joint_pos))
+            frame_err.append(quat_error_magnitude(robot.data.body_quat_w[:, h2], own))
+            head_err.append(torch.sqrt(-torch.log(walk.head_orientation(env, std=1.0).clamp(min=1e-12))))
             hz.append((robot.data.root_pos_w[:, 2] - gait.ref_root_pos_w[:, 2]).abs())
             contact_ok.append((walk.foot_contact(env) == (gait.ref['contact'] > 0.5)).float().mean(-1))
         dphase = ((gait.phase - phase0) % 1.0)
@@ -58,9 +63,13 @@ def main():
         print(f'[verify] open-loop replay 0.3 s (reference starts): torso height error median {hz[:, ~idle].median()*1000:.1f} mm, '
               f'max {hz[:, ~idle].amax()*1000:.1f} mm; foot contact agreement {cm[:, ~idle].mean():.2f}')
         assert hz[:, ~idle].median() < 0.03 and cm[:, ~idle].mean() > 0.7
+        frame_err = torch.stack(frame_err).amax().item(); head_err = torch.stack(head_err)[:, ~idle]
+        print(f'[verify] neck frame vs Head_2 max {np.degrees(frame_err):.3f} deg; open-loop head orientation error median '
+              f'{np.degrees(head_err.median().item()):.1f} deg (reference neck 20 deg up, clipped at 17 deg)')
+        assert frame_err < np.radians(0.5)
         head = robot.actuators['head']
         np.testing.assert_allclose(head.stiffness.cpu().numpy(), v2.NECK_KP); np.testing.assert_allclose(head.damping.cpu().numpy(), v2.NECK_KD)
-        h2 = robot.body_names.index('Head_2'); mass = robot.root_physx_view.get_masses()[:, h2].numpy()
+        mass = robot.root_physx_view.get_masses()[:, h2].numpy()
         lo, hi = v1.HEAD_MASS_KG
         assert mass.min() >= lo - 1e-6 and mass.max() <= hi + 1e-6, (mass.min(), mass.max())
         print(f'[verify] neck kp {v2.NECK_KP} kd {v2.NECK_KD}, Head_2 {mass.min():.2f}..{mass.max():.2f} kg  OK')

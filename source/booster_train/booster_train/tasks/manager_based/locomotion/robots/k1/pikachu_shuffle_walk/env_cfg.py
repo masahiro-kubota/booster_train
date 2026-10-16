@@ -2,8 +2,9 @@
 
 As Disney's BDX and Olaf walking policies: the reference (joint positions, torso pose and velocity, foot contacts) is looked
 up from densely sampled gait cycles and used only in the rewards; the actor sees the command, the phase, the torso yaw relative
-to the reference and proprioception. The head is the v1 head on its current mount with the HeadV1Sim settings (neck kp 30,
-kd 3, firmware target clip, Head_2 mass 2.5 to 5.0 kg and COM randomized around v1).
+to the reference and proprioception. The head orientation is rewarded as in the Idle task, at the same share of the reward.
+The head is the v1 head on its current mount with the HeadV1Sim settings (neck kp 30, kd 3, firmware target clip, Head_2 mass
+2.5 to 5.0 kg and COM randomized around v1).
 """
 from dataclasses import fields
 from pathlib import Path
@@ -79,6 +80,9 @@ class ObservationsCfg:
 class RewardsCfg:
     leg_joints = RewTerm(func=mdp.joint_tracking, weight=15.0, params={"joint_names": LEG_JOINTS, "std": 0.15})
     upper_joints = RewTerm(func=mdp.joint_tracking, weight=5.0, params={"joint_names": UPPER_JOINTS, "std": 0.15})
+    # The Idle task's head orientation term (std 0.2). Weight 2.5: with the neck's share of upper_joints, a 3 to 6 deg head droop
+    # costs the same fraction of the positive reward as in the Idle task (0.5 % at 3 deg, 1.7 % at 6 deg).
+    head_orientation = RewTerm(func=mdp.head_orientation, weight=2.5, params={"std": 0.2})
     torso_orientation = RewTerm(func=mdp.torso_orientation, weight=10.0, params={"std": 0.2})
     torso_height = RewTerm(func=mdp.torso_height, weight=5.0, params={"std": 0.03})
     torso_position = RewTerm(func=mdp.torso_position_xy, weight=2.0, params={"std": 0.1})

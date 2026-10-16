@@ -6,7 +6,7 @@ import numpy as np
 import torch
 from isaaclab.managers import CommandTerm, CommandTermCfg
 from isaaclab.utils import configclass
-from isaaclab.utils.math import quat_apply, quat_from_euler_xyz, quat_mul, wrap_to_pi, yaw_quat, euler_xyz_from_quat
+from isaaclab.utils.math import quat_apply, quat_from_euler_xyz, quat_mul, wrap_to_pi, euler_xyz_from_quat
 
 from ..pikachu_idle_walk.commands import SmoothVelocityCommand, SmoothVelocityCommandCfg
 from .gait import GaitLibrary
