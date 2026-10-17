@@ -13,9 +13,10 @@ Environment:
    occur. The action offset is Idle frame 0 with the arms 3 deg inside their limits.
 5. Over 10 s of commands both modes and both switches occur, the arm references stay 3 deg inside the limits and nothing is
    NaN; with zero actions for 0.3 s from standing starts the arm and neck joints stay within 15 deg rms of the reference.
-6. Head settings (neck gains, Head_2 mass range), the reward terms and the observation sizes.
+6. Head settings (neck gains, Head_2 mass range), the Trunk and hand masses (with the exterior: the mass file plus the Trunk
+   variation), the reward terms and the observation sizes.
 
-    env -u PYTHONPATH <isaaclab python> scripts/verify_idle_shuffle.py --headless --num_envs 64
+    env -u PYTHONPATH <isaaclab python> scripts/verify_idle_shuffle.py --headless --num_envs 64 [--task Booster-K1-Pikachu-IdleShuffle-Exterior-v0]
 """
 import argparse
 from isaaclab.app import AppLauncher
@@ -25,7 +26,10 @@ parser.add_argument('--num_envs', type=int, default=64)
 AppLauncher.add_app_launcher_args(parser)
 args = parser.parse_args(); app = AppLauncher(args).app
 
+import json
 import math
+from pathlib import Path
+
 import gymnasium as gym
 import numpy as np
 import torch
@@ -124,6 +128,18 @@ def main():
         mass = robot.root_physx_view.get_masses()[:, h2].numpy(); lo, hi = v1.HEAD_MASS_KG
         assert mass.min() >= lo - 1e-6 and mass.max() <= hi + 1e-6, (mass.min(), mass.max())
         print(f'[verify] neck kp {v2.NECK_KP} kd {v2.NECK_KD}, Head_2 {mass.min():.2f}..{mass.max():.2f} kg  OK')
+        names = ('Trunk', 'left_hand_link', 'right_hand_link')
+        ids = [robot.body_names.index(n) for n in names]
+        masses = robot.root_physx_view.get_masses()
+        print('[verify] masses ' + ', '.join(f'{n} {masses[:, i].min():.3f}..{masses[:, i].max():.3f} kg' for n, i in zip(names, ids)))
+        if getattr(env.cfg.events, 'trunk_mass', None) is not None:
+            rows = json.loads(Path(env.cfg.scene.robot.spawn.mass_file).read_text())['links']
+            lo, hi = env.cfg.events.trunk_mass.params['mass_distribution_params']
+            trunk = rows['Trunk']['combined']['mass_kg']
+            assert masses[:, ids[0]].min() >= trunk + lo - 1e-4 and masses[:, ids[0]].max() <= trunk + hi + 1e-4, (trunk, lo, hi)
+            for n, i in zip(names[1:], ids[1:]):
+                np.testing.assert_allclose(masses[:, i].numpy(), rows[n]['combined']['mass_kg'], rtol=1e-5)
+            print(f'[verify] exterior: Trunk {trunk:.3f} kg {lo:+.2f}..{hi:+.2f}, hands as the mass file  OK')
         rm = env.reward_manager
         print('[verify] rewards', {n: rm.get_term_cfg(n).weight for n in rm.active_terms})
         assert task.ObservationsCfg.PolicyCfg().joint_pos.history_length == 5

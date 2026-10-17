@@ -11,8 +11,10 @@ the Idle frame 0 pose as the action offset and the hip-flexion limit for the tor
   stops (the shuffle walk pressed the right shoulder roll at its 14 N m limit).
 """
 import math
+from pathlib import Path
 
 import isaaclab.envs.mdp as base
+from isaaclab.managers import EventTermCfg as EventTerm
 from isaaclab.managers import ObservationGroupCfg as ObsGroup, ObservationTermCfg as ObsTerm, RewardTermCfg as RewTerm
 from isaaclab.managers import SceneEntityCfg, TerminationTermCfg as DoneTerm
 from isaaclab.utils import configclass
@@ -28,6 +30,11 @@ from .commands import ARM_JOINTS, ARM_LIMIT_MARGIN_DEG, IdleShuffleCommandCfg
 
 MOTION = f"{BOOSTER_ASSETS_DIR}/motions/K1/k1_pikachu_idle_scale0842_pingpong_tile3_blender50_grounded_hold0p5.npz"
 ARM_MARGIN = math.radians(ARM_LIMIT_MARGIN_DEG)
+# Torso exterior S3-12 (shell, cover plates, side and lower foam, clamp V19, bolts) on Trunk and the arm foam on the hand links:
+# design volumes and assumed densities, not weighed (project-memos/walk-leg-clearance-20261016/scripts/exterior_mass_properties.py).
+# Trunk 6.50 -> 8.28 kg (exterior 1.78 kg, 1.53..1.96 over the density range); the Trunk mass is varied by EXTERIOR_MASS_ADD_KG.
+EXTERIOR_MASS_FILE = str(Path(__file__).parent / "exterior_s3-12_mass_properties.json")
+EXTERIOR_MASS_ADD_KG = (-0.3, 0.3)
 
 
 @configclass
@@ -133,3 +140,25 @@ class IdleShufflePlayEnvCfg(IdleShuffleEnvCfg):
         self.observations.policy.enable_corruption = False
         self.events.push_robot = None
         self.commands.velocity.moving_start_fraction = 0.0
+
+
+def use_exterior(cfg):
+    """The torso exterior and arm foam masses (EXTERIOR_MASS_FILE, which also keeps the v1 head) and the Trunk mass variation."""
+    cfg.scene.robot.spawn.mass_file = EXTERIOR_MASS_FILE
+    cfg.events.trunk_mass = EventTerm(func=base.randomize_rigid_body_mass, mode="startup", params={
+        "asset_cfg": SceneEntityCfg("robot", body_names="Trunk"), "mass_distribution_params": EXTERIOR_MASS_ADD_KG,
+        "operation": "add", "recompute_inertia": True})
+
+
+@configclass
+class IdleShuffleExteriorEnvCfg(IdleShuffleEnvCfg):
+    def __post_init__(self):
+        super().__post_init__()
+        use_exterior(self)
+
+
+@configclass
+class IdleShuffleExteriorPlayEnvCfg(IdleShufflePlayEnvCfg):
+    def __post_init__(self):
+        super().__post_init__()
+        use_exterior(self)
